@@ -100,7 +100,10 @@ def save_artifacts(model, vectorizer, accuracy):
     joblib.dump(model, "model.pkl")
     joblib.dump(vectorizer, "vectorizer.pkl")
     joblib.dump(accuracy, "accuracy.pkl")
-    print("Model, vectorizer, and accuracy saved to disk.")
+    # Save feature names for Explainable AI
+    feature_names = vectorizer.get_feature_names_out().tolist()
+    joblib.dump(feature_names, "feature_names.pkl")
+    print("Model, vectorizer, accuracy, and feature names saved to disk.")
 
 
 if __name__ == "__main__":
