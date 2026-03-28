@@ -31,6 +31,16 @@ const uploadContent = document.getElementById("uploadContent");
 const uploadSuccess = document.getElementById("uploadSuccess");
 const uploadFilename= document.getElementById("uploadFilename");
 
+// Image OCR scan
+const imageInput       = document.getElementById("imageInput");
+const checkImageBtn    = document.getElementById("checkImageBtn");
+const imageErrorMsg    = document.getElementById("imageErrorMsg");
+const imageResultPanel = document.getElementById("imageResultPanel");
+const extractedTextBox = document.getElementById("extractedTextBox");
+const imageVerdict     = document.getElementById("imageVerdict");
+const imageConfidence  = document.getElementById("imageConfidence");
+const imageCombinedNote = document.getElementById("imageCombinedNote");
+
 // Feedback
 const feedbackSection = document.getElementById("feedbackSection");
 const fbCorrect       = document.getElementById("fbCorrect");
@@ -53,6 +63,9 @@ const urlList = document.getElementById("urlList");
 const reputationCard = document.getElementById("reputationCard");
 const reputationInfo = document.getElementById("reputationInfo");
 
+const modelBadge = document.getElementById("modelBadge");
+const predictImageAttach = document.getElementById("predictImageAttach");
+
 // Dashboard
 const statTotal  = document.getElementById("statTotal");
 const statSpam   = document.getElementById("statSpam");
@@ -62,10 +75,15 @@ const historyBody= document.getElementById("historyBody");
 // Analytics
 const analyticsEmpty = document.getElementById("analyticsEmpty");
 
+// User nav
+const userAvatar = document.getElementById("userAvatar");
+const userNameEl = document.getElementById("userName");
+
 // State
 let isSoundEnabled = true;
 let currentScanId = null;
 let currentPrediction = null;
+let currentUser = null;
 let trendChart = null;
 let volumeChart = null;
 
@@ -178,6 +196,96 @@ function resetUploadZone() {
 }
 
 // ═══════════════════════════════════════════════
+//  IMAGE OCR + SPAM PREDICTION
+// ═══════════════════════════════════════════════
+if (checkImageBtn && imageInput) {
+    checkImageBtn.addEventListener("click", checkImageSpam);
+}
+
+function checkImageSpam() {
+    if (!imageInput || !checkImageBtn) return;
+
+    imageErrorMsg.hidden = true;
+    imageErrorMsg.textContent = "";
+
+    if (!imageInput.files || imageInput.files.length === 0) {
+        imageErrorMsg.textContent = "Please choose a JPG or PNG image first.";
+        imageErrorMsg.hidden = false;
+        return;
+    }
+
+    const file = imageInput.files[0];
+    const ext = file.name.split(".").pop().toLowerCase();
+    if (!["jpg", "jpeg", "png"].includes(ext)) {
+        imageErrorMsg.textContent = "Unsupported file type. Use JPG, JPEG, or PNG.";
+        imageErrorMsg.hidden = false;
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append("image", file);
+    const emailExtra = emailText.value.trim();
+    if (emailExtra) formData.append("email_text", emailExtra);
+
+    checkImageBtn.classList.add("loading");
+    imageResultPanel.hidden = true;
+
+    fetch(`${API_BASE}/predict_image`, { method: "POST", body: formData })
+        .then(async (res) => {
+            const data = await res.json().catch(() => ({}));
+            return { ok: res.ok, data };
+        })
+        .then(({ ok, data }) => {
+            checkImageBtn.classList.remove("loading");
+            if (!ok || data.error) {
+                imageErrorMsg.textContent = data.error || "Could not analyze the image. Try again.";
+                imageErrorMsg.hidden = false;
+                return;
+            }
+
+            imageResultPanel.hidden = false;
+            extractedTextBox.textContent = data.extracted_text || "";
+
+            const isSpam = data.prediction === "Spam";
+            imageVerdict.textContent = data.prediction;
+            imageVerdict.className = "image-verdict " + (isSpam ? "spam" : "ham");
+            const clsName = data.model || data.classifier;
+            const modelPart = clsName ? ` · ${clsName}` : "";
+            imageConfidence.textContent = `Confidence: ${data.confidence}%${modelPart}`;
+
+            if (data.combined_with_email) {
+                imageCombinedNote.textContent = "Analysis used your email text above plus text from the image.";
+                imageCombinedNote.hidden = false;
+            } else {
+                imageCombinedNote.hidden = true;
+            }
+
+            currentScanId = data.id;
+            currentPrediction = data.prediction_raw;
+
+            const conf01 = typeof data.confidence === "number" ? data.confidence / 100 : 0;
+            playFeedbackSound(isSpam ? "spam" : "safe");
+            showResult(data.prediction_raw, conf01, data.model_accuracy, data.model || data.classifier);
+            showExplanation(data.explanation || []);
+            showSpamWords(data.spam_words || [], data.prediction_raw);
+            showUrlAnalysis(data.urls || []);
+            showReputation(data.sender || "");
+
+            feedbackMsg.textContent = "";
+            fbCorrect.disabled = false;
+            fbWrong.disabled = false;
+            feedbackSection.style.display = "flex";
+
+            imageResultPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        })
+        .catch(() => {
+            checkImageBtn.classList.remove("loading");
+            imageErrorMsg.textContent = "Could not reach the server. Is server.py running?";
+            imageErrorMsg.hidden = false;
+        });
+}
+
+// ═══════════════════════════════════════════════
 //  MAIN SCAN FUNCTION
 // ═══════════════════════════════════════════════
 function checkSpam() {
@@ -196,11 +304,21 @@ function checkSpam() {
     scanBtn.classList.add("loading");
     resultSection.classList.remove("visible");
 
-    fetch(`${API_BASE}/predict`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text })
-    })
+    const hasAttach = predictImageAttach && predictImageAttach.files && predictImageAttach.files.length > 0;
+    const req = hasAttach
+        ? (() => {
+            const fd = new FormData();
+            fd.append("message", text);
+            fd.append("image", predictImageAttach.files[0]);
+            return fetch(`${API_BASE}/predict`, { method: "POST", body: fd });
+        })()
+        : fetch(`${API_BASE}/predict`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message: text }),
+        });
+
+    req
     .then(res => {
         if (!res.ok) throw new Error(`Server responded with ${res.status}`);
         return res.json();
@@ -212,7 +330,7 @@ function checkSpam() {
         currentScanId = data.id;
         currentPrediction = data.prediction;
 
-        showResult(data.prediction, data.confidence, data.model_accuracy);
+        showResult(data.prediction, data.confidence, data.model_accuracy, data.model || data.classifier);
         showExplanation(data.explanation || []);
         showSpamWords(data.spam_words || [], data.prediction);
         showUrlAnalysis(data.urls || []);
@@ -232,11 +350,23 @@ function checkSpam() {
 }
 
 // ─── Display result ──────────────────────────
-function showResult(prediction, confidence, modelAccuracy) {
+function showResult(prediction, confidence, modelAccuracy, modelUsed) {
     const isSpam = prediction === "spam";
     const pct = confidence ? (confidence * 100) : 0;
 
     playFeedbackSound(isSpam ? "spam" : "safe");
+
+    if (modelBadge) {
+        if (modelUsed) {
+            modelBadge.hidden = false;
+            const isBert = String(modelUsed).toUpperCase().includes("BERT");
+            modelBadge.className = "model-badge " + (isBert ? "bert" : "legacy");
+            modelBadge.textContent = isBert ? "Model: BERT" : `Model: ${modelUsed}`;
+        } else {
+            modelBadge.hidden = true;
+            modelBadge.textContent = "";
+        }
+    }
 
     resultCard.className = `result-card ${isSpam ? "spam" : "ham"}`;
     resultIcon.innerHTML = isSpam ? "🚨" : "✅";
@@ -393,6 +523,10 @@ function sendFeedback(type) {
 
 // ─── Error ───────────────────────────────────
 function showError(message) {
+    if (modelBadge) {
+        modelBadge.hidden = true;
+        modelBadge.textContent = "";
+    }
     resultCard.className = "result-card spam";
     resultIcon.innerHTML = "❌";
     resultVerdict.textContent = "Error";
@@ -564,5 +698,35 @@ function escapeHtml(str) {
     return d.innerHTML;
 }
 
-// ─── Initial load ────────────────────────────
-loadDashboard();
+// ─── Auth check & Initial load ───────────────
+async function checkAuth() {
+    try {
+        const res = await fetch(`${API_BASE}/api/me`);
+        if (res.status === 401) {
+            window.location.href = '/login';
+            return;
+        }
+        const data = await res.json();
+        if (data.error) {
+            window.location.href = '/login';
+            return;
+        }
+        currentUser = data;
+        // Update user nav
+        if (userNameEl) userNameEl.textContent = data.username;
+        if (userAvatar) {
+            userAvatar.textContent = data.username.charAt(0).toUpperCase();
+        }
+        // Personalize dashboard heading
+        const dashH = document.getElementById('dashboardHeading');
+        if (dashH) dashH.innerHTML = `Welcome, <span class="gradient-text">${escapeHtml(data.username)}</span>`;
+        const dashSub = document.getElementById('dashboardSubtitle');
+        if (dashSub) dashSub.textContent = 'Your personal email scanning dashboard — stats, history, and threat analysis.';
+
+        loadDashboard();
+    } catch {
+        window.location.href = '/login';
+    }
+}
+
+checkAuth();

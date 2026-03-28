@@ -17,3 +17,8 @@ threadpoolctl==3.6.0
 tzdata==2025.3
 Werkzeug==3.1.6
 gunicorn
+Pillow>=10.0.0
+pytesseract>=0.3.10
+transformers>=4.38.0
+torch>=2.1.0
+safetensors>=0.4.0
